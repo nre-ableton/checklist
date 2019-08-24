@@ -1,3 +1,5 @@
+extern crate codemap;
+extern crate codemap_diagnostic;
 extern crate duct_sh;
 #[macro_use]
 extern crate failure;
@@ -9,18 +11,23 @@ extern crate maplit;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_yaml;
+extern crate starlark;
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use codemap_diagnostic::{ColorConfig, Emitter};
 use console::Style;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::Confirmation;
 use duct_sh::sh_dangerous;
 use failure::Error;
 use indicatif::{ProgressBar, ProgressStyle};
+use starlark::eval::simple::eval;
+use starlark::stdlib::global_environment;
 use structopt::clap::AppSettings;
 
 // Increment the version number every time the version changes. I can't figure out how to
@@ -113,9 +120,35 @@ fn shell_loop(checklist: &CheckList) -> Result<bool, Error> {
     let progress_bar = scopeguard::guard(b, |b| {
         b.finish_and_clear();
     });
+
+    let global_env = global_environment();
+    global_env.freeze();
+
     for item in &checklist.automated {
-        progress_bar.set_message(&item);
-        let command_res = sh_dangerous(item)
+        let mut env = global_env.child("shell_loop");
+        let map = Arc::new(Mutex::new(codemap::CodeMap::new()));
+
+        // change to match filename
+        let res = match eval(&map, "input", &item, false, &mut env) {
+            Err(diag) => {
+                let cloned_map = Arc::clone(&map);
+                let unlocked_map = cloned_map.lock().unwrap();
+                let mut emitter = Emitter::stderr(ColorConfig::Always, Some(&unlocked_map));
+                emitter.emit(&[diag]);
+                bail!("Error interpreting check '{}'", item);
+            },
+            Ok(res) => match res.get_type() {
+                "string" => res.to_str(),
+                _ => bail!(
+                    "Error interpreting check '{}': result must be string! (was {})",
+                    item,
+                    res.get_type()
+                )
+            }
+        };
+
+        progress_bar.set_message(&res);
+        let command_res = sh_dangerous(&res)
             .stdout_capture()
             .stderr_capture()
             .unchecked()
@@ -123,7 +156,7 @@ fn shell_loop(checklist: &CheckList) -> Result<bool, Error> {
         if !command_res.status.success() {
             progress_bar.finish_and_clear();
             println!("\nautomated tests: {}", failure.apply_to("failed"));
-            println!("{} running: {}\n", failure.apply_to("error"), item);
+            println!("{} running: {}\n", failure.apply_to("error"), &res);
             io::stdout().write_all(&command_res.stdout)?;
             io::stderr().write_all(&command_res.stderr)?;
             return Ok(false);

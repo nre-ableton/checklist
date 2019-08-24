@@ -12,6 +12,8 @@ edition = "2018"
 travis-ci = { repository = "wickedchicken/checklist" }
 
 [dependencies]
+codemap = "0.1.2"
+codemap-diagnostic = "0.1.1"
 console = "0.9.1"
 dialoguer = "0.4.0"
 duct_sh = "0.1.0"
@@ -22,6 +24,7 @@ scopeguard = "1.0.0"
 serde = "1.0.104"
 serde_derive = "1.0.102"
 serde_yaml = "0.8.11"
+starlark = "0.2.0"
 structopt = "0.3.3"
 
 [dev-dependencies]
